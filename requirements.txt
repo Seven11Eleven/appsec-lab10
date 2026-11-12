@@ -1,0 +1,8 @@
+# Runtime dependencies.
+# NOTE: `requests` is INTENTIONALLY pinned to an outdated version so that the
+# SCA stage (pip-audit) has real CVEs to detect in this lab.
+# Production fix: requests>=2.32.0
+flask==3.1.0
+requests==2.28.0
+python-dotenv==1.0.1
+hvac==2.3.0

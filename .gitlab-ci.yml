@@ -1,0 +1,70 @@
+# Lab 10 - CI pipeline: build + 2x SAST + 1x SCA + secret scanning.
+# Every analysis job exports its reports as pipeline artifacts (when: always),
+# so reports exist even when a tool exits non-zero ("|| true" = report mode).
+# To ENFORCE findings instead of only reporting: remove "|| true" or use the
+# tool's exit-code gating (e.g. bandit --severity-level high).
+
+image: python:3.11-slim
+
+stages: [build, sast, sca, secrets]
+
+.pip_setup: &pip_setup
+  before_script:
+    - python -m pip install --upgrade pip
+    - mkdir -p reports
+
+build_app:
+  stage: build
+  <<: *pip_setup
+  script:
+    - pip install -r requirements.txt
+    - python -m compileall -q app
+    - python -c "from app.main import create_app; print('import ok')"
+
+bandit_sast:                                # SAST #1 (python-specific, AST-based)
+  stage: sast
+  <<: *pip_setup
+  script:
+    - pip install "bandit[toml]"
+    - bandit -r app -f json -o reports/bandit-report.json || true
+    - bandit -r app -f txt  -o reports/bandit-report.txt  || true
+  artifacts:
+    when: always
+    paths: [reports/]
+
+semgrep_sast:                               # SAST #2 (multi-language rules)
+  stage: sast
+  image: semgrep/semgrep:latest
+  allow_failure: true                       # ruleset fetch depends on registry
+  script:
+    - mkdir -p reports
+    - semgrep scan --config p/python --config p/secrets --json --output reports/semgrep-report.json || true
+    - semgrep scan --config p/python --config p/secrets --text --output reports/semgrep-report.txt || true
+  artifacts:
+    when: always
+    paths: [reports/]
+
+pip_audit_sca:                              # SCA (dependency CVE audit)
+  stage: sca
+  <<: *pip_setup
+  script:
+    - pip install pip-audit
+    - pip-audit -r requirements.txt -f json -o reports/pip-audit-report.json || true
+    - pip-audit -r requirements.txt -f columns > reports/pip-audit-report.txt || true
+  artifacts:
+    when: always
+    paths: [reports/]
+
+gitleaks_secrets:                           # bonus: leaked-secrets scan
+  stage: secrets
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]                        # override image entrypoint for script steps
+  variables:
+    GIT_DEPTH: 0                            # full history for history scanning
+  script:
+    - mkdir -p reports
+    - gitleaks detect --source "$CI_PROJECT_DIR" --report-format json --report-path reports/gitleaks-report.json --exit-code 0 --redact
+  artifacts:
+    when: always
+    paths: [reports/]

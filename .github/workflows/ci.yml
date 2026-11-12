@@ -1,0 +1,85 @@
+name: lab10-ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q app
+      - run: python -c "from app.main import create_app; print('import ok')"
+
+  bandit:                                   # SAST #1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "bandit[toml]"
+      - run: |
+          mkdir -p reports
+          bandit -r app -f json -o reports/bandit-report.json || true
+          bandit -r app -f txt -o reports/bandit-report.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sast-bandit
+          path: reports/
+
+  semgrep:                                  # SAST #2
+    runs-on: ubuntu-latest
+    container: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p reports
+          semgrep scan --config p/python --config p/secrets --json --output reports/semgrep-report.json || true
+          semgrep scan --config p/python --config p/secrets --text --output reports/semgrep-report.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sast-semgrep
+          path: reports/
+
+  pip-audit:                                # SCA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pip-audit
+      - run: |
+          mkdir -p reports
+          pip-audit -r requirements.txt -f json -o reports/pip-audit-report.json || true
+          pip-audit -r requirements.txt -f columns > reports/pip-audit-report.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sca-pip-audit
+          path: reports/
+
+  gitleaks:                                 # bonus: leaked-secrets scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                    # full history
+      - run: |
+          mkdir -p reports
+          docker run --rm -v "$PWD:/src" -w /src zricethezav/gitleaks:latest \
+            detect --source . --report-format json --report-path reports/gitleaks-report.json --exit-code 0 --redact
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: secrets-gitleaks
+          path: reports/
